@@ -44,17 +44,27 @@ class ASLApp:
 
         self.letter_var = tk.StringVar(value="...")
         self.word_var = tk.StringVar(value="")
-        self.target_letter = random.choice(CLASSES[:26])
         self.score = 0
         self.mode_game = tk.BooleanVar(value=True)
         self.predictions = deque(maxlen=30)
         self.start_time = time.time()
+
+        self.used_letters = set()
+        self.target_letter = self.generate_new_letter()
 
         self.build_ui()
         self.running = True
         self.video_thread = threading.Thread(target=self.run_camera)
         self.video_thread.daemon = True
         self.video_thread.start()
+
+    def generate_new_letter(self):
+        available = [l for l in CLASSES[:26] if l not in self.used_letters]
+        if not available:
+            self.used_letters.clear()
+            messagebox.showinfo("Completado", "Has identificado todas las letras. ¡Reiniciando!")
+            available = CLASSES[:26]
+        return random.choice(available)
 
     def build_ui(self):
         info_frame = tk.Frame(self.root, bg="white")
@@ -89,6 +99,7 @@ class ASLApp:
 
     def run_camera(self):
         cap = cv2.VideoCapture(0)
+        last_letter = None
         while self.running:
             ret, frame = cap.read()
             if not ret:
@@ -128,6 +139,11 @@ class ASLApp:
                     if len(self.predictions) == self.predictions.maxlen:
                         most_common = Counter(self.predictions).most_common(1)[0][0]
                         letter = CLASSES[most_common]
+
+                        if letter == last_letter:
+                            continue  # evitar repetir la misma letra consecutivamente
+
+                        last_letter = letter
                         self.letter_var.set(letter)
 
                         if letter == "space":
@@ -139,7 +155,9 @@ class ASLApp:
 
                         if self.mode_game.get() and letter == self.target_letter:
                             self.score += 1
-                            self.target_letter = random.choice(CLASSES[:26])
+                            self.used_letters.add(letter)
+                            messagebox.showinfo("¡Correcto!", f"¡Adivinaste la letra {letter}!")
+                            self.target_letter = self.generate_new_letter()
                             self.target_label.config(text=f"{self.target_letter}")
                             self.score_label.config(text=f"Puntaje: {self.score}")
 
