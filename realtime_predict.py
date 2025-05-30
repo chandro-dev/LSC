@@ -20,7 +20,8 @@ CLASSES = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
 
 transform = transforms.Compose([
     transforms.Resize((128, 128)),
-    transforms.ToTensor()
+    transforms.ToTensor(),
+    transforms.Normalize([0.5], [0.5])
 ])
 
 model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
@@ -29,7 +30,7 @@ model.load_state_dict(torch.load("resnet18_asl_model.pth", map_location="cpu"))
 model.eval()
 
 mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(static_image_mode=False, max_num_hands=1)
+hands = mp_hands.Hands(static_image_mode=False, max_num_hands=1, min_detection_confidence=0.8, min_tracking_confidence=0.8)
 mp_draw = mp.solutions.drawing_utils
 
 class ASLApp:
@@ -47,8 +48,10 @@ class ASLApp:
         self.target_letter = random.choice(CLASSES[:26])
         self.score = 0
         self.mode_game = tk.BooleanVar(value=True)
-        self.predictions = deque(maxlen=30)  # más muestras para mayor estabilidad
+        self.predictions = deque(maxlen=45)  # más muestras para mayor precisión
         self.start_time = time.time()
+        self.frame_counter = 0
+        self.frame_interval = 5
 
         self.build_ui()
         self.running = True
@@ -94,6 +97,10 @@ class ASLApp:
             if not ret:
                 continue
 
+            self.frame_counter += 1
+            if self.frame_counter % self.frame_interval != 0:
+                continue
+
             x1, y1, x2, y2 = 100, 100, 324, 324
             roi = frame[y1:y2, x1:x2]
             roi_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
@@ -103,33 +110,33 @@ class ASLApp:
                 for hand_landmarks in result.multi_hand_landmarks:
                     mp_draw.draw_landmarks(roi, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
-            roi_pil = transforms.ToPILImage()(roi_rgb)
-            input_tensor = transform(roi_pil).unsqueeze(0)
+                roi_pil = transforms.ToPILImage()(roi_rgb)
+                input_tensor = transform(roi_pil).unsqueeze(0)
 
-            with torch.no_grad():
-                output = model(input_tensor)
-                pred_index = output.argmax(1).item()
-                self.predictions.append(pred_index)
+                with torch.no_grad():
+                    output = model(input_tensor)
+                    pred_index = output.argmax(1).item()
+                    self.predictions.append(pred_index)
 
-            if len(self.predictions) == self.predictions.maxlen:
-                most_common = Counter(self.predictions).most_common(1)[0][0]
-                letter = CLASSES[most_common]
-                self.letter_var.set(letter)
+                if len(self.predictions) == self.predictions.maxlen:
+                    most_common = Counter(self.predictions).most_common(1)[0][0]
+                    letter = CLASSES[most_common]
+                    self.letter_var.set(letter)
 
-                if letter == "space":
-                    self.word_var.set(self.word_var.get() + " ")
-                elif letter == "del":
-                    self.word_var.set(self.word_var.get()[:-1])
-                elif letter != "nothing":
-                    self.word_var.set(self.word_var.get() + letter)
+                    if letter == "space":
+                        self.word_var.set(self.word_var.get() + " ")
+                    elif letter == "del":
+                        self.word_var.set(self.word_var.get()[:-1])
+                    elif letter != "nothing":
+                        self.word_var.set(self.word_var.get() + letter)
 
-                if self.mode_game.get() and letter == self.target_letter:
-                    self.score += 1
-                    self.target_letter = random.choice(CLASSES[:26])
-                    self.target_label.config(text=f"{self.target_letter}")
-                    self.score_label.config(text=f"Puntaje: {self.score}")
+                    if self.mode_game.get() and letter == self.target_letter:
+                        self.score += 1
+                        self.target_letter = random.choice(CLASSES[:26])
+                        self.target_label.config(text=f"{self.target_letter}")
+                        self.score_label.config(text=f"Puntaje: {self.score}")
 
-                self.predictions.clear()
+                    self.predictions.clear()
 
             # Mostrar imagen
             frame_display = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
