@@ -20,8 +20,7 @@ CLASSES = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
 
 transform = transforms.Compose([
     transforms.Resize((128, 128)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.5], [0.5])
+    transforms.ToTensor()
 ])
 
 model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
@@ -30,7 +29,7 @@ model.load_state_dict(torch.load("resnet18_asl_model.pth", map_location="cpu"))
 model.eval()
 
 mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(static_image_mode=False, max_num_hands=1, min_detection_confidence=0.8, min_tracking_confidence=0.8)
+hands = mp_hands.Hands(static_image_mode=False, max_num_hands=1)
 mp_draw = mp.solutions.drawing_utils
 
 class ASLApp:
@@ -48,10 +47,8 @@ class ASLApp:
         self.target_letter = random.choice(CLASSES[:26])
         self.score = 0
         self.mode_game = tk.BooleanVar(value=True)
-        self.predictions = deque(maxlen=45)  # más muestras para mayor precisión
+        self.predictions = deque(maxlen=30)
         self.start_time = time.time()
-        self.frame_counter = 0
-        self.frame_interval = 5
 
         self.build_ui()
         self.running = True
@@ -97,48 +94,57 @@ class ASLApp:
             if not ret:
                 continue
 
-            self.frame_counter += 1
-            if self.frame_counter % self.frame_interval != 0:
-                continue
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            result = hands.process(frame_rgb)
+            letter = "..."
 
-            x1, y1, x2, y2 = 100, 100, 324, 324
-            roi = frame[y1:y2, x1:x2]
-            roi_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
-
-            result = hands.process(roi_rgb)
             if result.multi_hand_landmarks:
                 for hand_landmarks in result.multi_hand_landmarks:
-                    mp_draw.draw_landmarks(roi, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                    h, w, _ = frame.shape
+                    x_coords = [lm.x for lm in hand_landmarks.landmark]
+                    y_coords = [lm.y for lm in hand_landmarks.landmark]
+                    x_min = int(min(x_coords) * w) - 20
+                    x_max = int(max(x_coords) * w) + 20
+                    y_min = int(min(y_coords) * h) - 20
+                    y_max = int(max(y_coords) * h) + 20
+                    x_min = max(x_min, 0)
+                    y_min = max(y_min, 0)
+                    x_max = min(x_max, w)
+                    y_max = min(y_max, h)
 
-                roi_pil = transforms.ToPILImage()(roi_rgb)
-                input_tensor = transform(roi_pil).unsqueeze(0)
+                    roi = frame[y_min:y_max, x_min:x_max]
+                    roi_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
 
-                with torch.no_grad():
-                    output = model(input_tensor)
-                    pred_index = output.argmax(1).item()
-                    self.predictions.append(pred_index)
+                    mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
-                if len(self.predictions) == self.predictions.maxlen:
-                    most_common = Counter(self.predictions).most_common(1)[0][0]
-                    letter = CLASSES[most_common]
-                    self.letter_var.set(letter)
+                    roi_pil = transforms.ToPILImage()(roi_rgb)
+                    input_tensor = transform(roi_pil).unsqueeze(0)
 
-                    if letter == "space":
-                        self.word_var.set(self.word_var.get() + " ")
-                    elif letter == "del":
-                        self.word_var.set(self.word_var.get()[:-1])
-                    elif letter != "nothing":
-                        self.word_var.set(self.word_var.get() + letter)
+                    with torch.no_grad():
+                        output = model(input_tensor)
+                        pred_index = output.argmax(1).item()
+                        self.predictions.append(pred_index)
 
-                    if self.mode_game.get() and letter == self.target_letter:
-                        self.score += 1
-                        self.target_letter = random.choice(CLASSES[:26])
-                        self.target_label.config(text=f"{self.target_letter}")
-                        self.score_label.config(text=f"Puntaje: {self.score}")
+                    if len(self.predictions) == self.predictions.maxlen:
+                        most_common = Counter(self.predictions).most_common(1)[0][0]
+                        letter = CLASSES[most_common]
+                        self.letter_var.set(letter)
 
-                    self.predictions.clear()
+                        if letter == "space":
+                            self.word_var.set(self.word_var.get() + " ")
+                        elif letter == "del":
+                            self.word_var.set(self.word_var.get()[:-1])
+                        elif letter != "nothing":
+                            self.word_var.set(self.word_var.get() + letter)
 
-            # Mostrar imagen
+                        if self.mode_game.get() and letter == self.target_letter:
+                            self.score += 1
+                            self.target_letter = random.choice(CLASSES[:26])
+                            self.target_label.config(text=f"{self.target_letter}")
+                            self.score_label.config(text=f"Puntaje: {self.score}")
+
+                        self.predictions.clear()
+
             frame_display = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(frame_display)
             img = img.resize((800, 480))
