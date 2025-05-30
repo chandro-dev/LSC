@@ -1,3 +1,4 @@
+import cv2
 import kagglehub
 import pandas as pd
 import torch
@@ -6,6 +7,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, random_split
 import matplotlib.pyplot as plt
 from sklearn.metrics import classification_report
+import numpy as np
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
 # === Descargar dataset ===
 path = kagglehub.dataset_download("datamunge/sign-language-mnist")
@@ -17,7 +20,9 @@ class SignMNISTDataset(Dataset):
     def __init__(self, csv_path):
         df = pd.read_csv(csv_path)
         self.labels = df.iloc[:, 0].values
-        self.images = df.iloc[:, 1:].values.reshape(-1, 1, 28, 28).astype('float32') / 255.0
+        self.images = df.iloc[:, 1:].values.reshape(-1, 28, 28).astype('float32')
+        self.images = np.array([cv2.resize(img, (64, 64)) for img in self.images])  # escalado
+        self.images = self.images[:, np.newaxis, :, :] / 255.0
 
     def __len__(self):
         return len(self.labels)
@@ -37,7 +42,7 @@ class CNNClassifier(nn.Module):
         )
         self.fc = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(64 * 7 * 7, 128),
+        nn.Linear(64 * 16 * 16, 128),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(128, num_classes)
@@ -104,3 +109,29 @@ show_sample()
 torch.save(model.state_dict(), "cnn_sign_mnist_model.pth")
 print("✅ Modelo guardado como cnn_sign_mnist_model.pth")
 
+# === Cargar dataset de prueba ===
+test_dataset = SignMNISTDataset("sign_mnist_test.csv")
+test_loader = DataLoader(test_dataset, batch_size=64)
+
+# === Predicciones ===
+all_preds = []
+all_labels = []
+
+with torch.no_grad():
+    for x, y in test_loader:
+        x = x.to(device)
+        outputs = model(x)
+        preds = outputs.argmax(1).cpu().numpy()
+        all_preds.extend(preds)
+        all_labels.extend(y.numpy())
+
+# === Matriz de confusión ===
+labels = [chr(i + 65) for i in range(26) if chr(i + 65) != 'J']  # A-Z sin J
+cm = confusion_matrix(all_labels, all_preds)
+plt.figure(figsize=(12, 10))
+sns.heatmap(cm, annot=True, fmt="d", xticklabels=labels, yticklabels=labels, cmap="Blues")
+plt.xlabel("Predicción")
+plt.ylabel("Etiqueta real")
+plt.title("Matriz de Confusión - Sign Language MNIST")
+plt.tight_layout()
+plt.show()
