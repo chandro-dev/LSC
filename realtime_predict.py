@@ -8,7 +8,6 @@ from collections import deque, Counter
 import mediapipe as mp
 import random
 import time
-import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 from PIL import Image, ImageTk
@@ -54,9 +53,9 @@ class ASLApp:
 
         self.build_ui()
         self.running = True
-        self.video_thread = threading.Thread(target=self.run_camera)
-        self.video_thread.daemon = True
-        self.video_thread.start()
+
+        self.cap = cv2.VideoCapture(0)
+        self.update_frame()
 
     def build_ui(self):
         info_frame = tk.Frame(self.root, bg="white")
@@ -100,81 +99,83 @@ class ASLApp:
 
     def quit(self):
         self.running = False
-        self.root.quit()
+        self.root.destroy()
 
-    def run_camera(self):
-        cap = cv2.VideoCapture(0)
-        while self.running:
-            ret, frame = cap.read()
-            if not ret:
-                continue
+    def update_frame(self):
+        if not self.running:
+            return
 
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = hands.process(frame_rgb)
-            letter = "..."
+        ret, frame = self.cap.read()
+        if not ret:
+            self.root.after(20, self.update_frame)
+            return
 
-            if result.multi_hand_landmarks:
-                for hand_landmarks in result.multi_hand_landmarks:
-                    h, w, _ = frame.shape
-                    x_coords = [lm.x for lm in hand_landmarks.landmark]
-                    y_coords = [lm.y for lm in hand_landmarks.landmark]
-                    x_min = int(min(x_coords) * w) - 20
-                    x_max = int(max(x_coords) * w) + 20
-                    y_min = int(min(y_coords) * h) - 20
-                    y_max = int(max(y_coords) * h) + 20
-                    x_min = max(x_min, 0)
-                    y_min = max(y_min, 0)
-                    x_max = min(x_max, w)
-                    y_max = min(y_max, h)
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        result = hands.process(frame_rgb)
+        letter = "..."
 
-                    roi = frame[y_min:y_max, x_min:x_max]
-                    roi_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+        if result.multi_hand_landmarks:
+            for hand_landmarks in result.multi_hand_landmarks:
+                h, w, _ = frame.shape
+                x_coords = [lm.x for lm in hand_landmarks.landmark]
+                y_coords = [lm.y for lm in hand_landmarks.landmark]
+                x_min = int(min(x_coords) * w) - 20
+                x_max = int(max(x_coords) * w) + 20
+                y_min = int(min(y_coords) * h) - 20
+                y_max = int(max(y_coords) * h) + 20
+                x_min = max(x_min, 0)
+                y_min = max(y_min, 0)
+                x_max = min(x_max, w)
+                y_max = min(y_max, h)
 
-                    mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                roi = frame[y_min:y_max, x_min:x_max]
+                roi_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
 
-                    roi_pil = transforms.ToPILImage()(roi_rgb)
-                    input_tensor = transform(roi_pil).unsqueeze(0)
+                mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
-                    with torch.no_grad():
-                        output = model(input_tensor)
-                        pred_index = output.argmax(1).item()
-                        pred_letter = CLASSES[pred_index]
+                roi_pil = transforms.ToPILImage()(roi_rgb)
+                input_tensor = transform(roi_pil).unsqueeze(0)
 
-                        if pred_letter != self.last_letter:
-                            self.predictions.append(pred_index)
-                            self.last_letter = pred_letter
+                with torch.no_grad():
+                    output = model(input_tensor)
+                    pred_index = output.argmax(1).item()
+                    pred_letter = CLASSES[pred_index]
 
-                    if len(self.predictions) == self.predictions.maxlen:
-                        most_common = Counter(self.predictions).most_common(1)[0][0]
-                        letter = CLASSES[most_common]
-                        self.letter_var.set(letter)
+                    if pred_letter != self.last_letter:
+                        self.predictions.append(pred_index)
+                        self.last_letter = pred_letter
 
-                        if letter == "space":
-                            self.word_var.set(self.word_var.get() + " ")
-                        elif letter == "del":
-                            self.word_var.set(self.word_var.get()[:-1])
-                        elif letter != "nothing":
-                            self.word_var.set(self.word_var.get() + letter)
+                if len(self.predictions) == self.predictions.maxlen:
+                    most_common = Counter(self.predictions).most_common(1)[0][0]
+                    letter = CLASSES[most_common]
+                    self.letter_var.set(letter)
 
-                        if self.mode_game.get() and letter == self.target_letter:
-                            self.score += 1
-                            self.score_label.config(text=f"Puntaje: {self.score}")
-                            self.used_letters.add(self.target_letter)
-                            messagebox.showinfo("Correcto", f"¡Correcto! Era la letra {self.target_letter}")
-                            self.next_letter()
+                    if letter == "space":
+                        self.word_var.set(self.word_var.get() + " ")
+                    elif letter == "del":
+                        self.word_var.set(self.word_var.get()[:-1])
+                    elif letter != "nothing":
+                        self.word_var.set(self.word_var.get() + letter)
 
-                        self.predictions.clear()
+                    if self.mode_game.get() and letter == self.target_letter:
+                        self.score += 1
+                        self.score_label.config(text=f"Puntaje: {self.score}")
+                        self.used_letters.add(self.target_letter)
+                        messagebox.showinfo("Correcto", f"¡Correcto! Era la letra {self.target_letter}")
+                        self.next_letter()
 
-            frame_display = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(frame_display)
-            img = img.resize((800, 480))
-            imgtk = ImageTk.PhotoImage(image=img)
-            self.canvas.imgtk = imgtk
-            self.canvas.configure(image=imgtk)
+                    self.predictions.clear()
 
-        cap.release()
-        cv2.destroyAllWindows()
+        frame_display = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(frame_display)
+        img = img.resize((800, 480), Image.NEAREST)
+        imgtk = ImageTk.PhotoImage(image=img)
+        self.canvas.imgtk = imgtk
+        self.canvas.configure(image=imgtk)
 
+        self.root.after(20, self.update_frame)
+
+        
 if __name__ == "__main__":
     root = tk.Tk()
     app = ASLApp(root)
